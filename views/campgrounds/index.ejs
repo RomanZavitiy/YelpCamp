@@ -1,0 +1,48 @@
+<% include ../partials/header %>
+
+<!-- <% if(currentUser && currentUser.isAdmin) { %>
+    <h1>You're an admin</h1>
+<% } %> -->
+
+<div class="container">
+    <header class="jumbotron">
+        <div class="container">
+        <h1>Welcome to YelpCamp!</h1>
+        <p>View our gandpicked campgrounds from all over the world</p>
+        <p>
+            <a class="btn btn-primary btn-lg" href="/campgrounds/new">Add new campground</a>
+        </p>
+        <p>
+            <form action="/campgrounds" method="GET" class="form-inline">
+                <div class="form-group">
+                    <input type="text" class="form-control" placeholder="Search..." name="search">
+                    <input type="submit" class="btn btn-default" value="Search">
+                </div>
+            </form>
+        </p>
+        </div>
+    </header>
+
+    
+    <div class="row text-center" style="display:flex; flex-wrap: wrap;">
+        
+    
+    <% campgrounds.forEach(function(campground){ %>
+        <div class="col-md-3 col-sm-6">
+            <div class="thumbnail">
+                    <img id="image-at-index" src="<%= campground.image %>">
+                <div class="caption">
+                    <h4><%= campground.name%></h4>
+                    <div>
+                        <span class="badge label-primary"><i class="fas fa-thumbs-up"></i> <%= campground.likes.length %></span>
+                    </div>
+                </div>
+                <p>
+                    <a href="/campgrounds/<%= campground._id %>" class="btn btn-primary">More Info</a>
+                </p>
+            </div>
+        </div>
+    <% }) %>
+    </div>
+</div>
+<% include ../partials/footer %>
