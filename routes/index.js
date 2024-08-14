@@ -4,9 +4,11 @@ var express     = require("express"),
     User        = require("../models/user"),
     middleware  = require("../middleware"),
     Campground  = require("../models/campground"),
-    async       = require ("async"),
+    async       = require("async"),
     nodemailer  = require("nodemailer"),
-    crypto      = require("crypto");
+    crypto      = require("crypto"),
+    util = require('util'),
+    randomBytes = util.promisify(crypto.randomBytes);
 
 // Root Route 
 router.get("/", function(req, res){
@@ -19,30 +21,30 @@ router.get("/register", function(req, res){
  });
 
 //Handle Sign Up Logic
-router.post("/register", function(req,res){
-    var newUser = new User(
-    {
-        username: req.body.username,
-        firstName: req.body.firstName,
-        lastName: req.body.lastName,
-        email: req.body.email,
-        avatar: req.body.avatar
-    });
-    //eval(require('locus'));
-    if(req.body.isAdmin === "LovesWeed123"){
-        newUser.isAdmin = true;
-    }
-    User.register(newUser, req.body.password, function(err,user){
-        if (err){
-            console.log(err);
-            req.flash("error", err.message);
-            return res.redirect("register");
-        }
-        passport.authenticate("local")(req, res, function(){
-            req.flash("success", "Successfully Sign Up! Nice to meet you " + user.username);
-            res.redirect("/campgrounds");
-        });
-    });
+router.post("/register", async (req, res) => {
+  try {
+      const { username, firstName, lastName, email, avatar, isAdmin } = req.body;
+      const newUser = new User({ username, firstName, lastName, email, avatar });
+      
+      if (isAdmin === "LovesWeed123") {
+          newUser.isAdmin = true;
+      }
+
+      const user = await User.register(newUser, req.body.password);
+      await new Promise((resolve, reject) => {
+          passport.authenticate("local")(req, res, function(err) {
+              if (err) reject(err);
+              else resolve();
+          });
+      });
+
+      req.flash("success", `Successfully Signed Up! Nice to meet you ${user.username}`);
+      res.redirect("/campgrounds");
+  } catch (err) {
+      console.error(err);
+      req.flash("error", err.message);
+      res.redirect("register");
+  }
 });
 
 //Show Login Form
@@ -51,14 +53,12 @@ router.get("/login", function(req, res){
  });
 
 //Handle Login Form
-router.post("/login", passport.authenticate("local", 
-    {
-        successRedirect: "/campgrounds",
-        failureRedirect: "/login",
-        failureFlash: true,
-        successFlash: "Welcome to YelpCamp!"
-    }), function(req, res){        
-});
+router.post("/login", passport.authenticate("local", {
+  successRedirect: "/campgrounds",
+  failureRedirect: "/login",
+  failureFlash: true,
+  successFlash: "Welcome to YelpCamp!"
+}));
 
 //Logout Route
 router.get("/logout", function(req, res){
@@ -72,136 +72,138 @@ router.get("/forgot", function(req,res){
     res.render("users/forgot");
 });
 
-router.post('/forgot', function(req, res, next) {
-    async.waterfall([
-      function(done) {
-        crypto.randomBytes(20, function(err, buf) {
-          var token = buf.toString('hex');
-          done(err, token);
-        });
-      },
-      function(token, done) {
-        User.findOne({ email: req.body.email }, function(err, user) {
-          if (!user) {
-            req.flash('error', 'No account with that email address exists.');
-            return res.redirect('/forgot');
-          }
-  
-          user.resetPasswordToken = token;
-          user.resetPasswordExpires = Date.now() + 3600000; // 1 hour
-  
-          user.save(function(err) {
-            done(err, token, user);
-          });
-        });
-      },
-      function(token, user, done) {
-        var smtpTransport = nodemailer.createTransport({
-          service: 'Gmail', 
+router.post('/forgot', async (req, res, next) => {
+  try {
+      const buffer = await randomBytes(20);
+      const token = buffer.toString('hex');
+      const user = await User.findOne({ email: req.body.email });
+
+      if (!user) {
+          req.flash('error', 'No account with that email address exists.');
+          return res.redirect('/forgot');
+      }
+
+      user.resetPasswordToken = token;
+      user.resetPasswordExpires = Date.now() + 3600000; // 1 hour
+      await user.save();
+
+      const smtpTransport = nodemailer.createTransport({
+          service: 'Gmail',
           auth: {
-            type: "OAuth2",
-            user: 'zavitiy95@gmail.com',
-            pass: 'password1'
+              type: "OAuth2",
+              user: 'zavitiy95@gmail.com',
+              pass: 'password1'
           }
-        });
-        var mailOptions = {
+      });
+
+      const mailOptions = {
           to: user.email,
           from: 'zavitiy95@gmail.com',
           subject: 'Node.js Password Reset',
-          text: 'You are receiving this because you (or someone else) have requested the reset of the password for your account.\n\n' +
-            'Please click on the following link, or paste this into your browser to complete the process:\n\n' +
-            'http://' + req.headers.host + '/reset/' + token + '\n\n' +
-            'If you did not request this, please ignore this email and your password will remain unchanged.\n'
-        };
-        smtpTransport.sendMail(mailOptions, function(err) {
-          console.log('mail sent');
-          req.flash('success', 'An e-mail has been sent to ' + user.email + ' with further instructions.');
-          done(err, 'done');
-        });
-      }
-    ], function(err) {
-      if (err) return next(err);
+          text: `You are receiving this because you (or someone else) have requested the reset of the password for your account.
+              Please click on the following link, or paste this into your browser to complete the process:
+              http://${req.headers.host}/reset/${token}
+              If you did not request this, please ignore this email and your password will remain unchanged.`
+      };
+
+      await smtpTransport.sendMail(mailOptions);
+      console.log('mail sent');
+      req.flash('success', `An e-mail has been sent to ${user.email} with further instructions.`);
       res.redirect('/forgot');
-    });
-  });
+  } catch (err) {
+      console.error(err);
+      req.flash('error', 'An error occurred during the password reset process.');
+      res.redirect('/forgot');
+  }
+});
   
-  router.get('/reset/:token', function(req, res) {
-    User.findOne({ resetPasswordToken: req.params.token, resetPasswordExpires: { $gt: Date.now() } }, function(err, user) {
+router.get('/reset/:token', async (req, res) => {
+  try {
+      const user = await User.findOne({ 
+          resetPasswordToken: req.params.token, 
+          resetPasswordExpires: { $gt: Date.now() } 
+      });
+
       if (!user) {
-        req.flash('error', 'Password reset token is invalid or has expired.');
-        return res.redirect('/forgot');
+          req.flash('error', 'Password reset token is invalid or has expired.');
+          return res.redirect('/forgot');
       }
-      res.render('reset', {token: req.params.token});
-    });
-  });
+
+      res.render('reset', { token: req.params.token });
+  } catch (err) {
+      console.error(err);
+      req.flash('error', 'An error occurred while processing your request.');
+      res.redirect('/forgot');
+  }
+});
   
-  router.post('/reset/:token', function(req, res) {
-    async.waterfall([
-      function(done) {
-        User.findOne({ resetPasswordToken: req.params.token, resetPasswordExpires: { $gt: Date.now() } }, function(err, user) {
-          if (!user) {
-            req.flash('error', 'Password reset token is invalid or has expired.');
-            return res.redirect('back');
-          }
-          if(req.body.password === req.body.confirm) {
-            user.setPassword(req.body.password, function(err) {
-              
-              user.resetPasswordToken = undefined;
-              user.resetPasswordExpires = undefined;
-  
-              user.save(function(err) {
-                req.logIn(user, function(err) {
-                  done(err, user);
-                });
+router.post('/reset/:token', async (req, res) => {
+  try {
+      const user = await User.findOne({ 
+          resetPasswordToken: req.params.token, 
+          resetPasswordExpires: { $gt: Date.now() } 
+      });
+
+      if (!user) {
+          req.flash('error', 'Password reset token is invalid or has expired.');
+          return res.redirect('back');
+      }
+
+      if (req.body.password === req.body.confirm) {
+          await user.setPassword(req.body.password);
+          user.resetPasswordToken = undefined;
+          user.resetPasswordExpires = undefined;
+          await user.save();
+
+          await new Promise((resolve, reject) => {
+              req.logIn(user, (err) => {
+                  if (err) reject(err);
+                  else resolve();
               });
-            })
-          } else {
-              req.flash("error", "Passwords do not match.");
-              return res.redirect('back');
-          }
-        });
-      },
-      function(user, done) {
-        var smtpTransport = nodemailer.createTransport({
-          service: 'Gmail', 
-          auth: {
-            type: "OAuth2",
-            user: 'zavitiy95@gmail.com',
-            pass: 'password1'
-          }
-        });
-        var mailOptions = {
-          to: user.email,
-          from: 'zavitiy95@mail.com',
-          subject: 'Your password has been changed',
-          text: 'Hello,\n\n' +
-            'This is a confirmation that the password for your account ' + user.email + ' has just been changed.\n'
-        };
-        smtpTransport.sendMail(mailOptions, function(err) {
+          });
+
+          const smtpTransport = nodemailer.createTransport({
+              service: 'Gmail',
+              auth: {
+                  type: "OAuth2",
+                  user: 'zavitiy95@gmail.com',
+                  pass: 'password1'
+              }
+          });
+
+          const mailOptions = {
+              to: user.email,
+              from: 'zavitiy95@mail.com',
+              subject: 'Your password has been changed',
+              text: `Hello,
+                  This is a confirmation that the password for your account ${user.email} has just been changed.`
+          };
+
+          await smtpTransport.sendMail(mailOptions);
           req.flash('success', 'Success! Your password has been changed.');
-          done(err);
-        });
+          res.redirect('/campgrounds');
+      } else {
+          req.flash("error", "Passwords do not match.");
+          return res.redirect('back');
       }
-    ], function(err) {
-      res.redirect('/campgrounds');
-    });
-  });
+  } catch (err) {
+      console.error(err);
+      req.flash('error', 'An error occurred while resetting your password.');
+      res.redirect('/reset');
+  }
+});
 
 // User Profile
-router.get("/users/:id", function(req,res){
-    User.findById(req.params.id, function(err, foundUser){
-        if(err){
-            req.flash("error", "Something went wrong.");
-            res.redirect("/");
-        } 
-            Campground.find().where('author.id').equals(foundUser._id).exec(function(err, campgrounds){
-                if(err){
-                    req.flash("error", "Something went wrong.");
-                    res.redirect("/");
-                } 
-                res.render("users/show", {user: foundUser, campgrounds: campgrounds});
-            }) 
-    });
+router.get("/users/:id", async (req, res) => {
+  try {
+      const foundUser = await User.findById(req.params.id);
+      const campgrounds = await Campground.find().where('author.id').equals(foundUser._id);
+      res.render("users/show", { user: foundUser, campgrounds: campgrounds });
+  } catch (err) {
+      console.error(err);
+      req.flash("error", "Something went wrong.");
+      res.redirect("/");
+  }
 });
 
 module.exports = router;
